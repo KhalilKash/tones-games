@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Practice identifying sequences of pitches by ear.">
+  <title>Pitch Trainer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: system-ui, -apple-system, sans-serif;
+      color: #172f37;
+      background: #eef4f2;
+      --muted: #4b6369;
+      --line: #cad9d6;
+      --accent: #145b51;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+
+    main {
+      width: min(100%, 44rem);
+      margin: 0 auto;
+      padding: clamp(1.75rem, 7vw, 4rem) clamp(1rem, 4vw, 2rem);
+    }
+
+    header { margin-bottom: 1.6rem; }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: clamp(2.25rem, 7vw, 3.5rem); letter-spacing: -0.055em; line-height: 1; }
+    h2 { font-size: 1rem; }
+    header p { margin-top: 0.75rem; color: var(--muted); line-height: 1.5; }
+
+    .panel {
+      margin-bottom: 0.8rem;
+      padding: clamp(0.9rem, 3vw, 1.25rem);
+      border: 1px solid var(--line);
+      border-radius: 0.9rem;
+      background: #fff;
+    }
+
+    .tone-heading, .actions, form, label {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .tone-heading, .actions { justify-content: space-between; }
+    .tone-heading p { margin-top: 0.15rem; color: var(--muted); font-size: 0.85rem; }
+    label { color: var(--muted); font-size: 0.85rem; font-weight: 600; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: clamp(0.3rem, 1.5vw, 0.55rem);
+      margin-top: 0.75rem;
+    }
+
+    button, input, select {
+      min-height: 2.65rem;
+      border: 1px solid var(--line);
+      border-radius: 0.5rem;
+      background: #fff;
+      color: inherit;
+      font: inherit;
+    }
+
+    button { padding: 0.4rem 0.65rem; font-size: 0.88rem; font-weight: 650; cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled, input:disabled, select:disabled { opacity: 0.5; cursor: default; }
+    :is(button, input, select):focus-visible { outline: 3px solid #257e70; outline-offset: 2px; }
+    input, select { padding: 0.35rem 0.55rem; }
+    input { width: 4.6rem; }
+
+    #tone-keys button { min-height: 3.2rem; background: #e6f2ee; color: #17463f; font-size: 1.2rem; }
+    #quick-tests button { padding-inline: 0.2rem; }
+    .actions { margin-top: 0.85rem; gap: 0.7rem; }
+    .start { background: var(--accent); border-color: var(--accent); color: white; }
+
+    .feedback {
+      border-left: 0.25rem solid #6a8985;
+      background: #f8fcfa;
+      line-height: 1.5;
+    }
+
+    .feedback[data-result="incorrect"] { border-left-color: #a33a31; background: #fff5f3; }
+    .feedback[data-result="correct"] { border-left-color: var(--accent); }
+    #message { font-weight: 600; }
+    #solution { margin-top: 0.65rem; }
+    #solution p { margin-top: 0.2rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Pitch Trainer</h1>
+      <p>Listen to a sequence, then identify each tone in order.</p>
+    </header>
+
+    <section class="panel" aria-labelledby="tones-heading">
+      <div class="tone-heading">
+        <div>
+          <h2 id="tones-heading">Playable tones</h2>
+          <p>Low to high</p>
+        </div>
+        <label>Tone count <select id="tone-count"></select></label>
+      </div>
+      <div class="grid" id="tone-keys" role="group" aria-label="Tones, low to high"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="test-heading">
+      <h2 id="test-heading">Start a test</h2>
+      <div class="grid" id="quick-tests"></div>
+      <div class="actions">
+        <form id="custom-test">
+          <label>Custom length <input id="length" type="number" min="1" max="100" value="6" required></label>
+          <button class="start" type="submit">Start</button>
+        </form>
+        <button id="replay" type="button" disabled>Replay sequence</button>
+      </div>
+    </section>
+
+    <section class="panel feedback" id="feedback" aria-live="polite">
+      <p id="message">Try a tone or choose a test to begin.</p>
+      <div id="solution" hidden>
+        <h2>Correct sequence</h2>
+        <p id="correct-sequence"></p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const baseFrequencies = [261.63, 293.66, 329.63, 392, 440];
+    const frequencies = [1, 2, 4].flatMap(multiplier =>
+      baseFrequencies.map(frequency => frequency * multiplier)
+    );
+    const toneCountInput = document.querySelector("#tone-count");
+    const toneKeys = document.querySelector("#tone-keys");
+    const quickTests = document.querySelector("#quick-tests");
+    const customTest = document.querySelector("#custom-test");
+    const customLength = document.querySelector("#length");
+    const replay = document.querySelector("#replay");
+    const feedback = document.querySelector("#feedback");
+    const message = document.querySelector("#message");
+    const solution = document.querySelector("#solution");
+    const correctSequence = document.querySelector("#correct-sequence");
+
+    let toneCount = baseFrequencies.length;
+    let lastSequence = [];
+    let answerIndex = null;
+    let playing = false;
+    let audio;
+    let toneSamples;
+
+    function makeButton(text, onClick) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = text;
+      button.addEventListener("click", onClick);
+      return button;
+    }
+
+    function updateControls() {
+      for (const control of document.querySelectorAll("main button, main input, main select")) {
+        control.disabled = playing;
+      }
+      replay.disabled = playing || lastSequence.length === 0;
+    }
+
+    function showTones(count) {
+      toneCount = count;
+      toneCountInput.value = String(count);
+      const buttons = Array.from({ length: count }, (_, note) => {
+        const button = makeButton(String(note + 1), () => chooseTone(note));
+        button.setAttribute("aria-label", `Tone ${note + 1}`);
+        return button;
+      });
+      toneKeys.replaceChildren(...buttons);
+      updateControls();
+    }
+
+    function setFeedback(text, result = "", sequence = []) {
+      message.textContent = text;
+      feedback.dataset.result = result;
+      correctSequence.textContent = sequence.map(note => note + 1).join(" → ");
+      solution.hidden = sequence.length === 0;
+    }
+
+    function finish(text, result, sequence) {
+      answerIndex = null;
+      setFeedback(text, result, sequence);
+    }
+
+    function promptForNote() {
+      setFeedback(`Note ${answerIndex + 1} of ${lastSequence.length}. Click the matching tone.`);
+    }
+
+    function startTest(length) {
+      if (playing) return;
+      lastSequence = Array.from({ length }, () => Math.floor(Math.random() * toneCount));
+      replaySequence();
+    }
+
+    function replaySequence() {
+      if (playing || lastSequence.length === 0) return;
+      const neededTones = Math.max(...lastSequence) + 1;
+      if (neededTones > toneCount) showTones(neededTones);
+      answerIndex = 0;
+      setFeedback("Listen to the sequence…");
+      play(lastSequence);
+    }
+
+    function chooseTone(note) {
+      if (playing) return;
+      if (answerIndex === null) {
+        play([note]);
+        return;
+      }
+
+      const expected = lastSequence[answerIndex];
+      if (note !== expected) {
+        finish(
+          `Incorrect on note ${answerIndex + 1} of ${lastSequence.length}. ` +
+          `You chose tone ${note + 1}. The correct tone was ${expected + 1}.`,
+          "incorrect",
+          lastSequence
+        );
+        return;
+      }
+
+      answerIndex += 1;
+      if (answerIndex === lastSequence.length) {
+        finish("Correct! Replay this sequence or choose another test.", "correct");
+      } else {
+        promptForNote();
+      }
+    }
+
+    function makeTone(frequency, sampleRate) {
+      const length = Math.round(sampleRate * 0.42);
+      const fade = Math.round(sampleRate * 0.012);
+      const step = 2 * Math.PI * frequency / sampleRate;
+      const samples = new Float32Array(length);
+      for (let i = 0; i < length; i += 1) {
+        const envelope = Math.min(1, i / fade, (length - 1 - i) / fade);
+        samples[i] = 0.275 * Math.sin(i * step) * envelope;
+      }
+      return samples;
+    }
+
+    async function play(notes) {
+      playing = true;
+      updateControls();
+      try {
+        if (!audio) {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          audio = new AudioContext();
+          toneSamples = frequencies.map(frequency => makeTone(frequency, audio.sampleRate));
+        }
+        await audio.resume();
+
+        const gap = Math.round(audio.sampleRate * 0.16);
+        const stride = toneSamples[0].length + gap;
+        const buffer = audio.createBuffer(1, stride * notes.length - gap, audio.sampleRate);
+        const samples = buffer.getChannelData(0);
+        notes.forEach((note, index) => samples.set(toneSamples[note], index * stride));
+
+        const source = audio.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audio.destination);
+        await new Promise(resolve => {
+          source.addEventListener("ended", resolve, { once: true });
+          source.start();
+        });
+        source.disconnect();
+        if (answerIndex !== null) promptForNote();
+      } catch {
+        finish("Audio playback failed. Check your browser’s audio settings and try again.", "incorrect");
+      } finally {
+        playing = false;
+        updateControls();
+      }
+    }
+
+    for (let note = 1; note <= frequencies.length; note += 1) {
+      toneCountInput.add(new Option(String(note), String(note)));
+    }
+    for (let length = 1; length <= baseFrequencies.length; length += 1) {
+      const label = length === 1 ? "1 note" : `${length} notes`;
+      quickTests.append(makeButton(label, () => startTest(length)));
+    }
+    toneCountInput.addEventListener("change", () => {
+      const count = Number(toneCountInput.value);
+      if (count === toneCount) return;
+      showTones(count);
+      finish(`Playable tone count set to ${count}. Choose a test to begin.`);
+    });
+    customTest.addEventListener("submit", event => {
+      event.preventDefault();
+      startTest(customLength.valueAsNumber);
+    });
+    replay.addEventListener("click", replaySequence);
+    showTones(toneCount);
+  </script>
+</body>
+</html>
